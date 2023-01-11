@@ -54,11 +54,13 @@ template<typename CharT, std::size_t N>
 fixed_string(const CharT (&str)[N]) -> fixed_string<CharT, N - 1>;
 
 // #### default supported types -- TODO: to be replaced by pmt::pmtv declaration
+//done
 using supported_type = std::variant<uint8_t, uint32_t, int8_t, int16_t, int32_t, float, double, std::complex<float>, std::complex<double> /*, ...*/>;
 
+//done
+enum class port_direction_t { INPUT, OUTPUT, ANY }; // 'ANY' only for query and not to be used for port declarations
 enum class connection_result_t { SUCCESS, FAILED };
 enum class port_type_t { STREAM, MESSAGE };
-enum class port_direction_t { INPUT, OUTPUT, ANY }; // 'ANY' only for query and not to be used for port declarations
 enum class port_domain_t { CPU, GPU, NET, FPGA, DSP, MLU };
 
 template<class T>
@@ -450,8 +452,6 @@ static_assert(Block<block>);
 
 
 class edge {
-    using port_direction_t::INPUT;
-    using port_direction_t::OUTPUT;
     std::shared_ptr<block> _src_block;
     std::shared_ptr<block> _dst_block;
     std::size_t _src_port_id;
@@ -460,9 +460,13 @@ class edge {
     std::string _name; // custom edge name
     bool _connected;
 
+    using port_direction_t::INPUT;
+    using port_direction_t::OUTPUT;
+
 public:
     edge() = delete;
     edge& operator=(const edge&) = delete;
+
     edge(std::shared_ptr<block> src_block, std::size_t src_port_id, std::shared_ptr<block> dst_block, std::size_t dst_port_id, int32_t weight, std::string_view name) :
             _src_block(src_block), _dst_block(dst_block), _src_port_id(src_port_id), _dst_port_id(dst_port_id), _weight(weight), _name(name) {
         if (!src_block->port<OUTPUT>(_src_port_id)) {
@@ -480,6 +484,7 @@ public:
                 _weight, _name, dst_port.pmt_type().index());
         }
     }
+
     edge(std::shared_ptr<block> src_block, std::string_view src_port_name, std::shared_ptr<block> dst_block, std::string_view dst_port_name, int32_t weight, std::string_view name) :
             _src_block(src_block), _dst_block(dst_block), _weight(weight), _name(name) {
         const auto src_id = _src_block->port_id<OUTPUT>(src_port_name);
