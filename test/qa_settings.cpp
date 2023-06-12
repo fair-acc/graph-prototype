@@ -205,15 +205,16 @@ const boost::ut::suite SettingsTests = [] {
         expect(eq(src.n_samples_max, n_samples)) << "check map constructor";
         expect(eq(src.settings().auto_update_parameters().size(), 4UL));
         expect(eq(src.settings().auto_forward_parameters().size(), 1UL)); // sample_rate
-        auto &block1 = flow_graph.make_node<TestBlock<float>>();
-        auto &block2 = flow_graph.make_node<TestBlock<float>>();
+        auto &block1 = flow_graph.make_node<TestBlock<float>>({{"name", "TestBlock#1"}});
+        auto &block2 = flow_graph.make_node<TestBlock<float>>({{"name", "TestBlock#2"}});
         auto &sink   = flow_graph.make_node<Sink<float>>();
+        expect(not block1.settings().changed()) << "settings not changed";
         expect(eq(sink.settings().auto_update_parameters().size(), 5UL));
         expect(eq(sink.settings().auto_forward_parameters().size(), 1UL)); // sample_rate
 
         block1.context = "Test Context";
         block1.settings().update_active_parameters();
-        expect(eq(block1.settings().auto_update_parameters().size(), 6UL));
+        expect(eq(block1.settings().auto_update_parameters().size(), 5UL));
         expect(eq(block1.settings().auto_forward_parameters().size(), 2UL));
 
         expect(block1.settings().get("context").has_value());
@@ -253,6 +254,7 @@ const boost::ut::suite SettingsTests = [] {
         expect(src.settings().auto_update_parameters().contains("sample_rate"));
         std::ignore = src.settings().set({ { "sample_rate", 49000.0f } });
         sched.run_and_wait();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
         expect(eq(src.n_samples_produced, n_samples)) << "did not produce enough output samples";
         expect(eq(sink.n_samples_consumed, n_samples)) << "did not consume enough input samples";
 
@@ -260,7 +262,7 @@ const boost::ut::suite SettingsTests = [] {
         expect(eq(block1.n_samples_max, n_samples)) << "receive tag announcing max samples";
         expect(eq(sink.n_samples_max, n_samples)) << "receive tag announcing max samples";
 
-        // expect(eq(src.sample_rate, 49000.0f)) << "src matching sample_rate";
+        expect(eq(src.sample_rate, 49000.0f)) << "src matching sample_rate";
         expect(eq(block1.sample_rate, 49000.0f)) << "block1 matching sample_rate";
         expect(eq(block2.sample_rate, 49000.0f)) << "block2 matching sample_rate";
         expect(eq(sink.sample_rate, 49000.0f)) << "sink matching src sample_rate";
@@ -275,7 +277,7 @@ const boost::ut::suite SettingsTests = [] {
     "constructor"_test = [] {
         "empty"_test = [] {
             auto block = TestBlock<float>();
-            block.init();
+            block.init(block.progress, block.ioThreadPool); // N.B. self-assign existing progress and thread-pool (just for unit-tests)
             expect(eq(block.settings().get().size(), 7UL));
             expect(eq(std::get<float>(*block.settings().get("scaling_factor")), 1.f));
         };
@@ -284,7 +286,7 @@ const boost::ut::suite SettingsTests = [] {
         "with init parameter"_test = [] {
             auto block = TestBlock<float>({ { "scaling_factor", 2.f } });
             expect(eq(block.settings().staged_parameters().size(), 1u));
-            block.init();
+            block.init(block.progress, block.ioThreadPool); // N.B. self-assign existing progress and thread-pool (just for unit-tests)
             expect(eq(block.settings().staged_parameters().size(), 0u));
             block.settings().update_active_parameters();
             expect(eq(block.settings().get().size(), 7UL));
@@ -319,7 +321,7 @@ const boost::ut::suite SettingsTests = [] {
         block.debug    = true;
         const auto val = block.settings().set({ { "vector_setting", std::vector{ 42.f, 2.f, 3.f } } });
         expect(val.empty()) << "unable to stage settings";
-        block.init();
+        block.init(block.progress, block.ioThreadPool); // N.B. self-assign existing progress and thread-pool (just for unit-tests)
         expect(eq(block.vector_setting, std::vector{ 42.f, 2.f, 3.f }));
         expect(eq(block.update_count, 1)) << fmt::format("actual update count: {}\n", block.update_count);
     };
@@ -338,8 +340,11 @@ const boost::ut::suite SettingsTests = [] {
     };
 
     "run-time type-erased node setter/getter"_test = [] {
+        std::shared_ptr<gr::Sequence>                       progress     = std::make_shared<gr::Sequence>();
+        std::shared_ptr<fair::thread_pool::BasicThreadPool> ioThreadPool = std::make_shared<fair::thread_pool::BasicThreadPool>("test_pool", fair::thread_pool::TaskType::IO_BOUND);
+        //
         auto wrapped1 = node_wrapper<TestBlock<float>>();
-        wrapped1.init();
+        wrapped1.init(progress, ioThreadPool);
         wrapped1.set_name("test_name");
         expect(eq(wrapped1.name(), "test_name"sv)) << "node_model wrapper name";
         expect(not wrapped1.unique_name().empty()) << "unique name";
@@ -350,7 +355,7 @@ const boost::ut::suite SettingsTests = [] {
         // via constructor
         auto wrapped2 = node_wrapper<TestBlock<float>>({ { "name", "test_name" } });
         std::ignore   = wrapped2.settings().set({ { "context", "a string" } });
-        wrapped2.init();
+        wrapped2.init(progress, ioThreadPool);
         expect(eq(wrapped2.name(), "test_name"sv)) << "node_model wrapper name";
         expect(not wrapped2.unique_name().empty()) << "unique name";
         std::ignore                          = wrapped2.settings().set({ { "context", "a string" } });

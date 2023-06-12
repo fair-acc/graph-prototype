@@ -135,15 +135,21 @@ struct TagMonitor : public node<TagMonitor<T, UseProcessOne>> {
 
 template<typename T, ProcessFunction UseProcessOne>
 struct TagSink : public node<TagSink<T, UseProcessOne>> {
-    IN<T>              in;
-    std::vector<tag_t> tags{};
-    std::int64_t       n_samples_produced{ 0 };
+    using ClockSourceType = std::chrono::system_clock;
+    IN<T>                                    in;
+    std::vector<tag_t>                       tags{};
+    std::int64_t                             n_samples_produced{ 0 };
+    std::chrono::time_point<ClockSourceType> timeFirstSample = ClockSourceType::now();
+    std::chrono::time_point<ClockSourceType> timeLastSample  = ClockSourceType::now();
 
     // template<fair::meta::t_or_simd<T> V>
     constexpr void
     process_one(const T &) noexcept
         requires(UseProcessOne == ProcessFunction::USE_PROCESS_ONE)
     {
+        if (n_samples_produced == 0) {
+            timeFirstSample = ClockSourceType::now();
+        }
         if (this->input_tags_present()) {
             const tag_t &tag = this->input_tags()[0];
             print_tag(tag, fmt::format("{}::process_one(...)\t received tag at {:6}", this->name, n_samples_produced));
@@ -151,6 +157,7 @@ struct TagSink : public node<TagSink<T, UseProcessOne>> {
             this->forward_tags();
         }
         n_samples_produced++;
+        timeLastSample = ClockSourceType::now();
     }
 
     // template<fair::meta::t_or_simd<T> V>
@@ -158,6 +165,9 @@ struct TagSink : public node<TagSink<T, UseProcessOne>> {
     process_bulk(std::span<const T> input) noexcept
         requires(UseProcessOne == ProcessFunction::USE_PROCESS_BULK)
     {
+        if (n_samples_produced == 0) {
+            timeFirstSample = ClockSourceType::now();
+        }
         if (this->input_tags_present()) {
             const tag_t &tag = this->input_tags()[0];
             print_tag(tag, fmt::format("{}::process_bulk(...)\t received tag at {:6}", this->name, n_samples_produced));
@@ -166,8 +176,14 @@ struct TagSink : public node<TagSink<T, UseProcessOne>> {
         }
 
         n_samples_produced += static_cast<std::int64_t>(input.size());
-
+        timeLastSample = ClockSourceType::now();
         return work_return_status_t::OK;
+    }
+
+    float
+    effective_sample_rate() const {
+        const auto total_elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(timeLastSample - timeFirstSample).count();
+        return total_elapsed_time == 0 ? std::numeric_limits<float>::quiet_NaN() : static_cast<float>(n_samples_produced) * 1e6f / static_cast<float>(total_elapsed_time);
     }
 };
 

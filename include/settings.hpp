@@ -456,6 +456,7 @@ public:
             }
             _staged.clear();
         }
+        settings_base::_changed.store(false);
         return forward_parameters;
     }
 
