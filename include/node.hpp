@@ -517,6 +517,16 @@ protected:
      */
     work_return_t
     work_internal(std::size_t requested_work) noexcept {
+        if constexpr (not HasRequiredProcessFunction<Derived>) {
+            if constexpr (HasProcessBulkFunction<Derived> and HasProcessOneFunction<Derived>) {
+                static_assert(HasRequiredProcessFunction<Derived>, "Ambiguous node interface. The node type implements both `process_one` and `process_bulk`. Remove one of them.");
+            } else if constexpr (traits::node::can_process_bulk_by_value<Derived>) {
+                static_assert(not traits::node::can_process_bulk_by_value<Derived>, "Deduced function parameters of `process_bulk` must be passed *by reference not by value*.");
+            } else {
+                static_assert(HasRequiredProcessFunction<Derived>,
+                              "Missing or incorrect node interface. The node type must implement either `process_one` or `process_bulk` with arguments matching the port types.");
+            }
+        }
         using fair::graph::work_return_status_t;
         using input_types                       = traits::node::input_port_types<Derived>;
         using output_types                      = traits::node::output_port_types<Derived>;
@@ -527,6 +537,10 @@ protected:
         std::size_t    samples_to_process       = 0;
         std::size_t    n_samples_until_next_tag = std::numeric_limits<std::size_t>::max(); // default: no tags in sight
         if constexpr (is_source_node) {
+            if constexpr (requires { &Derived::available_samples; }) {
+                static_assert(
+                        requires(const Derived &d) { d.available_samples(d); }, "Incorrect signature for available_samples. Should be `(signed) size_t available_samples(const NodeType&) const`");
+            }
             if constexpr (requires(const Derived &d) {
                               { self().available_samples(d) } -> std::same_as<std::make_signed_t<std::size_t>>;
                           }) {

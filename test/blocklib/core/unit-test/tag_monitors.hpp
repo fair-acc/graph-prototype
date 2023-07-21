@@ -45,7 +45,7 @@ struct TagSource : public node<TagSource<T, UseProcessOne>> {
     std::int64_t       n_samples_produced{ 0 };
 
     constexpr std::make_signed_t<std::size_t>
-    available_samples(const TagSource &) noexcept {
+    available_samples(const TagSource &) const noexcept {
         if constexpr (UseProcessOne == ProcessFunction::USE_PROCESS_ONE) {
             // '-1' -> DONE, produced enough samples
             return n_samples_max == n_samples_produced ? -1 : n_samples_max - n_samples_produced;
@@ -185,6 +185,11 @@ static_assert(HasRequiredProcessFunction<TagSource<int, ProcessFunction::USE_PRO
 static_assert(not HasProcessOneFunction<TagSource<int, ProcessFunction::USE_PROCESS_BULK>>);
 static_assert(HasProcessBulkFunction<TagSource<int, ProcessFunction::USE_PROCESS_BULK>>);
 static_assert(HasRequiredProcessFunction<TagSource<int, ProcessFunction::USE_PROCESS_BULK>>);
+
+// Clang 15 and 16 crash on the following static_assert
+#ifndef __clang__
+static_assert(traits::node::process_bulk_requires_ith_output_as_span<TagSource<int, ProcessFunction::USE_PROCESS_BULK>, 0>);
+#endif
 
 static_assert(HasProcessOneFunction<TagMonitor<int, ProcessFunction::USE_PROCESS_ONE>>);
 static_assert(not HasProcessOneFunction<TagMonitor<int, ProcessFunction::USE_PROCESS_BULK>>);
