@@ -38,7 +38,7 @@ public:
     A<std::uint64_t, "n_samples_max", Visible, Doc<"0: unlimited">>              n_samples_max = 1024;
     std::uint64_t                                                                n_samples_produced{ 0 };
     A<float, "avg. sample rate", Visible>                                        sample_rate = 1000.f;
-    A<std::uint64_t, "chunk_size", Visible, Doc<"number of samples per update">> chunk_size  = 100;
+    A<std::size_t, "chunk_size", Visible, Doc<"number of samples per update">> chunk_size  = 100;
 
     void
     settings_changed(const property_map & /*old_settings*/, const property_map & /*new_settings*/) {
@@ -64,8 +64,8 @@ public:
         const std::size_t limit              = std::min(writableSamples, remaining_samples);
         const std::size_t n_available        = std::min(limit, chunk_size.value);
 
-        std::size_t       samples_to_produce = n_available;
-        while (next_tag < tags.size() && tags[next_tag].index <= static_cast<std::make_signed_t<std::size_t>>(n_samples_produced + n_available)) {
+        std::uint64_t       samples_to_produce = n_available;
+        while (next_tag < tags.size() && tags[next_tag].index <= static_cast<std::make_signed_t<std::uint64_t>>(n_samples_produced + n_available)) {
             tag_test::print_tag(tags[next_tag], fmt::format("{}::process_bulk(...)\t publish tag at  {:6}", this->name, n_samples_produced));
             tag_t &out_tag     = this->output_tags()[0];
             out_tag            = tags[next_tag];
