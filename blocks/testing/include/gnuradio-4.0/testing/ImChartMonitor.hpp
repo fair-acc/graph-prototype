@@ -13,6 +13,8 @@
 
 namespace gr::testing {
 
+enum struct ResetChartView { RESET, KEEP };
+
 template<typename T>
 struct ImChartMonitor : public Block<ImChartMonitor<T>, BlockingIO<false>, Drawable<UICategory::ChartPane, "console">> {
     using ClockSourceType = std::chrono::system_clock;
@@ -37,8 +39,8 @@ struct ImChartMonitor : public Block<ImChartMonitor<T>, BlockingIO<false>, Drawa
 
     constexpr void
     processOne(const T &input) noexcept {
-        in.max_samples = 2 * sample_rate / 25;
-        const float Ts = 1.0f / sample_rate;
+        in.max_samples = static_cast<std::size_t>(2.f * sample_rate / 25.f);
+        const T Ts = T(1.0f) / T(sample_rate);
         _historyBufferX.push_back(_historyBufferX[1] + Ts);
         _historyBufferY.push_back(input);
 
@@ -52,14 +54,16 @@ struct ImChartMonitor : public Block<ImChartMonitor<T>, BlockingIO<false>, Drawa
     }
 
     work::Status
-    draw() noexcept {
+    draw(ResetChartView resetView = ResetChartView::RESET) noexcept {
         [[maybe_unused]] const work::Status status = this->invokeWork(); // calls work(...) -> processOne(...) (all in the same thread as this 'draw()'
         const auto [xMin, xMax]                    = std::ranges::minmax_element(_historyBufferX);
         const auto [yMin, yMax]                    = std::ranges::minmax_element(_historyBufferY);
         if (_historyBufferX.empty() || *xMin == *xMax || *yMin == *yMax) {
             return status; // buffer or axes' ranges are empty -> skip drawing
         }
-        fmt::println("\033[2J\033[H");
+        if (resetView == ResetChartView::RESET) {
+            fmt::println("\033[2J\033[H");
+        }
         // create reversed copies -- draw(...) expects std::ranges::input_range ->
         // TODO: change draw routine and/or write wrapper and/or provide direction option to HistoryBuffer
         std::vector<T> reversedX(_historyBufferX.rbegin(), _historyBufferX.rend());

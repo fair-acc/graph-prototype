@@ -56,6 +56,15 @@ concept TriggerMatcher = requires(T matcher, Tag tag) {
     { matcher(tag) } -> std::convertible_to<TriggerMatchResult>;
 };
 
+struct BasicTriggerNameMatcher {
+    property_map settings{};
+
+    TriggerMatchResult
+    operator()(const Tag &tag) {
+        return TriggerMatchResult::Matching;
+    }
+};
+
 } // namespace gr::basic
 
 #endif // GNURADIO_TRIGGERMATCHER_HPP

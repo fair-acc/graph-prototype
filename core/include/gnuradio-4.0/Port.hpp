@@ -1,6 +1,7 @@
 #ifndef GNURADIO_PORT_HPP
 #define GNURADIO_PORT_HPP
 
+#include <any>
 #include <complex>
 #include <span>
 #include <variant>
@@ -17,10 +18,10 @@ namespace gr {
 
 using gr::meta::fixed_string;
 
-#ifndef PMT_SUPPORTED_TYPE // // #### default supported types -- TODO: to be replaced by pmt::pmtv declaration
+#ifndef PMT_SUPPORTED_TYPE // // #### default supported setting types
 #define PMT_SUPPORTED_TYPE
 // Only DataSet<double> and DataSet<float> are added => consider to support more Dataset<T>
-using supported_type = std::variant<uint8_t, uint32_t, int8_t, int16_t, int32_t, float, double, std::complex<float>, std::complex<double>, DataSet<float>, DataSet<double>, pmtv::map_t /*, ...*/>;
+using supported_type = std::variant<uint8_t, uint32_t, int8_t, int16_t, int32_t, float, double, std::complex<float>, std::complex<double>, DataSet<float>, DataSet<double>, property_map /*, ...*/>;
 #endif
 
 enum class PortDirection { INPUT, OUTPUT, ANY }; // 'ANY' only for query and not to be used for port declarations
@@ -58,9 +59,9 @@ static_assert(is_port_domain<GPU>::value);
 static_assert(!is_port_domain<int>::value);
 
 template<class T>
-concept PortLike = requires(T t, const std::size_t n_items, const supported_type &newDefault) { // dynamic definitions
+concept PortLike = requires(T t, const std::size_t n_items, const std::any &newDefault) { // dynamic definitions
     typename T::value_type;
-    { t.defaultValue() } -> std::same_as<supported_type>;
+    { t.defaultValue() } -> std::same_as<std::any>;
     { t.setDefaultValue(newDefault) } -> std::same_as<bool>;
     { t.name } -> std::convertible_to<std::string_view>;
     { t.priority } -> std::convertible_to<std::int32_t>;
@@ -370,15 +371,15 @@ public:
         return portName;
     }
 
-    [[nodiscard]] supported_type
-    defaultValue() const noexcept {
+    [[nodiscard]] std::any defaultValue() const noexcept {
         return default_value;
     }
 
-    bool
-    setDefaultValue(const supported_type &newDefault) noexcept {
-        if (std::holds_alternative<T>(newDefault)) {
-            default_value = std::get<T>(newDefault);
+    // Attempts to set the default value from a std::any.
+    // Returns true on success, false if the types do not match.
+    bool setDefaultValue(const std::any &newDefault) noexcept {
+        if (newDefault.type() == typeid(T)) {
+            default_value = std::any_cast<T>(newDefault);
             return true;
         }
         return false;
@@ -702,12 +703,12 @@ private:
     struct model { // intentionally class-private definition to limit interface exposure and enhance composition
         virtual ~model() = default;
 
-        [[nodiscard]] virtual supported_type
+        [[nodiscard]] virtual std::any
         defaultValue() const noexcept
                 = 0;
 
         [[nodiscard]] virtual bool
-        setDefaultValue(const supported_type &val) noexcept
+        setDefaultValue(const std::any &val) noexcept
                 = 0;
 
         [[nodiscard]] virtual PortType
@@ -801,13 +802,13 @@ private:
 
         ~wrapper() override = default;
 
-        [[nodiscard]] supported_type
+        [[nodiscard]] std::any
         defaultValue() const noexcept override {
             return _value.defaultValue();
         }
 
         [[nodiscard]] bool
-        setDefaultValue(const supported_type &val) noexcept override {
+        setDefaultValue(const std::any &val) noexcept override {
             return _value.setDefaultValue(val);
         }
 
@@ -894,13 +895,13 @@ public:
     explicit constexpr DynamicPort(T &&arg, owned_value_tag) noexcept
         : name(arg.name), priority(arg.priority), min_samples(arg.min_samples), max_samples(arg.max_samples), _accessor{ std::make_unique<wrapper<T, true>>(std::forward<T>(arg)) } {}
 
-    [[nodiscard]] supported_type
+    [[nodiscard]] std::any
     defaultValue() const noexcept {
         return _accessor->defaultValue();
     }
 
     [[nodiscard]] bool
-    setDefaultValue(const supported_type &val) noexcept {
+    setDefaultValue(const std::any &val) noexcept {
         return _accessor->setDefaultValue(val);
     }
 
