@@ -191,6 +191,36 @@ target_include_directories(fftw INTERFACE ${FFTW_PREFIX}/install/include ${PROJE
 target_link_directories(fftw INTERFACE ${FFTW_PREFIX}/install/lib ${FFTW_PREFIX}/install/lib64)
 add_dependencies(fftw fftw_ext)
 
+
+## check for CPython and Numpy dependencies
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter Development NumPy)
+
+execute_process(
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckNumPy.py"
+        RESULT_VARIABLE NUMPY_NOT_FOUND
+        OUTPUT_VARIABLE NUMPY_INCLUDE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if(NOT NUMPY_NOT_FOUND)
+    set(PYTHON_AVAILABLE ON)
+else()
+    set(PYTHON_AVAILABLE OFF)
+endif()
+message(STATUS "###Python Include Dirs: ${Python3_INCLUDE_DIRS}")
+
+if(PYTHON_AVAILABLE)
+    # Add the include directory for Python and NumPy
+    include_directories(${Python3_INCLUDE_DIRS} ${NUMPY_INCLUDE_DIR})
+
+    # Link Python libraries to your tests or targets
+    # Example: target_link_libraries(<your-target> ${PYTHON_LIBRARIES})
+
+    # Define a preprocessor macro to indicate Python availability
+    add_definitions(-DPYTHON_AVAILABLE)
+endif()
+
 option(ENABLE_EXAMPLES "Enable Example Builds" ${GR_TOPLEVEL_PROJECT})
 
 option(ENABLE_TESTING "Enable Test Builds"  ${GR_TOPLEVEL_PROJECT})
