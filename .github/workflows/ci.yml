@@ -176,7 +176,7 @@ jobs:
           cd /cores
           for core in * ; do
           echo "copy executable for core file ${core}"
-          find ~/build -name ${core%%\.*} -exec cp {} . \;
+          find /home/runner/work/graph-prototype/build/ -name ${core%%\.*} -exec cp {} . \;
           done;
 
       - uses: actions/upload-artifact@v3
