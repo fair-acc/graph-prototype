@@ -52,6 +52,12 @@ jobs:
           python3 -m pip install gcovr --user --no-warn-script-location
           gcovr --version
 
+      - name: Set cores to get stored in /cores
+        run: |
+          sudo mkdir /cores
+          sudo chmod 777 /cores
+          sudo bash -c 'echo "/cores/%e.%p.%t" > /proc/sys/kernel/core_pattern'
+
       - name: Install gcc-13
         if: matrix.configurations.compiler == 'gcc13'
         run: |
@@ -123,9 +129,11 @@ jobs:
         if: matrix.configurations.compiler != 'gcc13' || matrix.cmake-build-type != 'Debug'
         working-directory: ${{runner.workspace}}/build
         shell: bash
-        run: ctest --output-on-failure
         env:
           NODE_PATH: /usr/local/lib/node_modules
+        run: |
+          ulimit -c unlimited # Allow core dumps
+          ctest --output-on-failure
 
       - name: execute tests with coverage
         if: matrix.configurations.compiler == 'gcc13' && matrix.cmake-build-type == 'Debug'
@@ -133,7 +141,9 @@ jobs:
           DISABLE_SENSITIVE_TESTS: 1 # disables tests which are sensitive to execution speed and will not run with instrumented code
         working-directory: ${{runner.workspace}}/build
         shell: bash
-        run: cmake --build . --target coverage
+        run: |
+          ulimit -c unlimited # Allow core dumps
+          cmake --build . --target coverage
 
       - name: execute native main binary
         if: matrix.configurations.compiler != 'emscripten'
@@ -156,4 +166,22 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           sonar-scanner --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}"
-        # Consult https://docs.sonarcloud.io/advanced-setup/ci-based-analysis/sonarscanner-cli/ for more information and options
+          # Consult https://docs.sonarcloud.io/advanced-setup/ci-based-analysis/sonarscanner-cli/ for more information and options
+
+      - name: Copy dumped executable to coredump directory
+        shell: bash
+        if: ${{ failure() }}  # Run only if something went wrong
+        run: |
+          # copy every binary for which a coredump file exists into the cores directory which will be uploaded
+          cd /cores
+          for core in * ; do
+          echo "copy executable for core file ${core}"
+          find /home/runner/work/graph-prototype/build/ -name ${core%%\.*} -exec cp {} . \;
+          done;
+
+      - uses: actions/upload-artifact@v3
+        name: Upload coredumps and coresponding binaries
+        if: ${{ failure() }}  # Run only if something went wrong
+        with:
+          name: cores
+          path: /cores
