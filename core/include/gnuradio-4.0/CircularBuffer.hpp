@@ -400,7 +400,7 @@ class CircularBuffer {
         buffer_writer() = delete;
         explicit buffer_writer(std::shared_ptr<buffer_impl> buffer) noexcept : _buffer(std::move(buffer)), _isMmapAllocated(_buffer->_isMmapAllocated), _size(_buffer->_size), _claimStrategy(std::addressof(_buffer->_claimStrategy)) { _buffer->_writer_count.fetch_add(1UZ, std::memory_order_relaxed); };
 
-        buffer_writer(buffer_writer&& other) noexcept : _buffer(std::move(other._buffer)), _isMmapAllocated(_buffer->_isMmapAllocated), _size(_buffer->_size), _claimStrategy(std::addressof(_buffer->_claimStrategy)), _nSamplesPublished(std::exchange(other._nSamplesPublished, 0UZ)), _isRangePublished(std::exchange(other._isRangePublished, true)), _index(std::exchange(other._index, 0UZ)), _offset(std::exchange(other._offset, 0)), _internalSpan(std::exchange(other._internalSpan, std::span<T>{})) {};
+        buffer_writer(buffer_writer&& other) noexcept : _buffer(std::move(other._buffer)), _isMmapAllocated(_buffer->_isMmapAllocated), _size(_buffer->_size), _claimStrategy(std::addressof(_buffer->_claimStrategy)), _nSamplesPublished(std::exchange(other._nSamplesPublished, 0UZ)), _isRangePublished(std::exchange(other._isRangePublished, true)), _index(std::exchange(other._index, 0UZ)), _offset(std::exchange(other._offset, 0)), _internalSpan(std::exchange(other._internalSpan, std::span<T>{})){};
 
         buffer_writer& operator=(buffer_writer tmp) noexcept {
             std::swap(_buffer, tmp._buffer);
@@ -658,6 +658,7 @@ class CircularBuffer {
 
         std::shared_ptr<Sequence> _readIndex = std::make_shared<Sequence>();
         mutable signed_index_type _readIndexCached;
+        mutable signed_index_type _lastAvailableIndexCached;                                  // Performance Optimization for available(). Store the index up to which availability has already been checked.
         BufferTypeLocal           _buffer;                                                    // controls buffer life-cycle, the rest are cache optimisations
         std::size_t               _size;                                                      // pre-condition: std::has_single_bit(_size)
         mutable std::size_t       _nSamplesFirstGet{std::numeric_limits<std::size_t>::max()}; // Maximum number of samples returned by the first call to get() (when reader is consumed). Subsequent calls to get(), without calling consume() again, will return up to _nSamplesFirstGet.
@@ -678,12 +679,24 @@ class CircularBuffer {
         explicit buffer_reader(std::shared_ptr<buffer_impl> buffer) noexcept : _buffer(buffer), _size(buffer->_size) {
             gr::detail::addSequences(_buffer->_read_indices, _buffer->_cursor, {_readIndex});
             _buffer->_reader_count.fetch_add(1UZ, std::memory_order_relaxed);
-            _readIndexCached = _readIndex->value();
+            _readIndexCached          = _readIndex->value();
+            _lastAvailableIndexCached = _readIndexCached;
         }
-        buffer_reader(buffer_reader&& other) noexcept : _readIndex(std::move(other._readIndex)), _readIndexCached(std::exchange(other._readIndexCached, _readIndex->value())), _buffer(other._buffer), _size(_buffer->_size), _nSamplesFirstGet(std::move(other._nSamplesFirstGet)), _rangesCounter(std::move(other._rangesCounter)), _nSamplesToConsume(std::move(other._nSamplesToConsume)), _nSamplesConsumed(std::move(other._nSamplesConsumed)) {}
+
+        buffer_reader(buffer_reader&& other) noexcept
+            : _readIndex(std::move(other._readIndex)),                                                        //
+              _readIndexCached(std::exchange(other._readIndexCached, _readIndex->value())),                   //
+              _lastAvailableIndexCached(std::exchange(other._lastAvailableIndexCached, _readIndex->value())), //
+              _buffer(other._buffer), _size(_buffer->_size),                                                  //
+              _nSamplesFirstGet(std::move(other._nSamplesFirstGet)),                                          //
+              _rangesCounter(std::move(other._rangesCounter)),                                                //
+              _nSamplesToConsume(std::move(other._nSamplesToConsume)),                                        //
+              _nSamplesConsumed(std::move(other._nSamplesConsumed)) {}
+
         buffer_reader& operator=(buffer_reader tmp) noexcept {
             std::swap(_readIndex, tmp._readIndex);
             std::swap(_readIndexCached, tmp._readIndexCached);
+            std::swap(_lastAvailableIndexCached, tmp._lastAvailableIndexCached);
             std::swap(_buffer, tmp._buffer);
             std::swap(_nSamplesFirstGet, tmp._nSamplesFirstGet);
             std::swap(_rangesCounter, tmp._rangesCounter);
@@ -729,7 +742,9 @@ class CircularBuffer {
         [[nodiscard]] constexpr signed_index_type position() const noexcept { return _readIndexCached; }
 
         [[nodiscard]] constexpr std::size_t available() const noexcept {
-            const auto last = _buffer->_claimStrategy.getHighestPublishedSequence(_readIndexCached + 1, _buffer->_cursor.value());
+            const auto startIndex     = std::max(_lastAvailableIndexCached, _readIndexCached);
+            const auto last           = _buffer->_claimStrategy.getHighestPublishedSequence(startIndex + 1, _buffer->_cursor.value());
+            _lastAvailableIndexCached = last;
             return static_cast<std::size_t>(last - _readIndexCached);
         }
     }; // class buffer_reader
