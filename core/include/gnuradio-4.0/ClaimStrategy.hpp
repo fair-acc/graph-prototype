@@ -293,7 +293,8 @@ public:
 #if (__cpp_lib_atomic_ref >= 201806L)
         return std::atomic_ref{_availableBuffer[index]} == flag;
 #else // clang's libc++ does not yet support std::atomic_ref
-        return _availableBuffer[index] == flag;
+        const auto localFlag    = std::atomic_load_explicit(&_availableBuffer[index], std::memory_order_acquire);
+        return localFlag == flag;
 #endif
     }
 
@@ -313,7 +314,7 @@ private:
 #if (__cpp_lib_atomic_ref >= 201806L)
         std::atomic_ref{_availableBuffer[index]} = flag;
 #else // clang's libc++ does not yet support std::atomic_ref
-        _availableBuffer[index] = flag;
+        std::atomic_store_explicit(&_availableBuffer[index], flag, std::memory_order_release);
 #endif
     }
     [[nodiscard]] forceinline std::int32_t calculateAvailabilityFlag(const signed_index_type sequence) const noexcept { return static_cast<std::int32_t>(sequence >> _indexShift); }
