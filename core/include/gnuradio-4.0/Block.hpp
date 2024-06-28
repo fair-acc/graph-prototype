@@ -504,7 +504,7 @@ public:
         if (lifecycle::isActive(this->state())) {
             emitErrorMessageIfAny("~Block()", this->changeStateTo(lifecycle::State::REQUESTED_STOP));
         }
-        if (isBlocking()) {
+        if constexpr (blockingIO) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
 
@@ -912,7 +912,12 @@ public:
                 if (auto consumed = inSpan.tryConsume(inSpan.size()); !consumed) {
                     throw gr::exception(fmt::format("Block {}::processScheduledMessages() could not consume the messages from the message port", unique_name));
                 }
+            } else {
+                return;
             }
+            // notify scheduler and others that block did some work -> progress
+            progress->incrementAndGet();
+            progress->notify_all();
         };
         processPort(msgIn);
         for_each_port(processPort, inputPorts<PortType::MESSAGE>(&self()));
@@ -1173,7 +1178,7 @@ protected:
 
     /***
      * skip leftover stride
-     * @param available number of samples that can be consumed from each sync port
+     * @param availableSamples number of samples that can be consumed from each sync port
      * @return inputSamples to skip before the chunk
      */
     std::size_t inputSamplesToSkipBeforeNextChunk(std::size_t availableSamples) {
@@ -1457,7 +1462,7 @@ protected:
 
         if (this->state() == lifecycle::State::STOPPED) {
             disconnectFromUpStreamParents();
-            return {requested_work, 0UZ, work::Status::DONE};
+            return {requested_work, 0UZ, DONE};
         }
 
         // evaluate number of available and processable samples
@@ -1484,7 +1489,7 @@ protected:
             emitErrorMessageIfAny("workInternal(): EOS tag arrived -> REQUESTED_STOP", this->changeStateTo(lifecycle::State::REQUESTED_STOP));
             publishEoS();
             this->setAndNotifyState(lifecycle::State::STOPPED);
-            return {requested_work, 0UZ, work::Status::DONE};
+            return {requested_work, 0UZ, DONE};
         }
         if (asyncEoS || (resampledIn == 0 && resampledOut == 0 && !hasAsyncIn && !hasAsyncOut)) {
             return {requested_work, 0UZ, resampledStatus};
@@ -1494,19 +1499,17 @@ protected:
         const bool limitByFirstTag = (!HasProcessBulkFunction<Derived> && HasProcessOneFunction<Derived>) && hasTag;
 
         // call the block implementation's work function
-        work::Status ret;
-        std::size_t  processedIn  = limitByFirstTag ? 1 : resampledIn;
-        std::size_t  processedOut = limitByFirstTag ? 1 : resampledOut;
-        const auto   inputSpans   = prepareStreams(inputPorts<PortType::STREAM>(&self()), processedIn);
-        auto         outputSpans  = prepareStreams(outputPorts<PortType::STREAM>(&self()), processedOut);
+        work::Status userReturnStatus = ERROR; // default if nothing has been set
+        std::size_t  processedIn      = limitByFirstTag ? 1UZ : resampledIn;
+        std::size_t  processedOut     = limitByFirstTag ? 1UZ : resampledOut;
+        const auto   inputSpans       = prepareStreams(inputPorts<PortType::STREAM>(&self()), processedIn);
+        auto         outputSpans      = prepareStreams(outputPorts<PortType::STREAM>(&self()), processedOut);
 
         updateInputAndOutputTags();
         applyChangedSettings();
 
         if constexpr (HasProcessBulkFunction<Derived>) {
-            invokeUserProvidedFunction("invokeProcessBulk", [&ret, &inputSpans, &outputSpans, this] noexcept(HasNoexceptProcessBulkFunction<Derived>) {
-                ret = invokeProcessBulk(inputSpans, outputSpans); // todo: evaluate how many were really produced...
-            });
+            invokeUserProvidedFunction("invokeProcessBulk", [&userReturnStatus, &inputSpans, &outputSpans, this] noexcept(HasNoexceptProcessBulkFunction<Derived>) { userReturnStatus = invokeProcessBulk(inputSpans, outputSpans); });
             meta::tuple_for_each(
                 [&processedIn]<typename TIn>(TIn& in) {
                     if constexpr (ConsumableSpan<TIn>) {
@@ -1555,20 +1558,20 @@ protected:
                 if constexpr ((meta::simdize_size_v<output_simd_types> != 0) and ((requires(Derived& d) {
                                   { d.processOne_simd(simd_size) };
                               }) or (meta::simdize_size_v<input_simd_types> != 0 and traits::block::can_processOne_simd<Derived>))) { // SIMD loop
-                    invokeUserProvidedFunction("invokeProcessOneSimd", [&ret, &inputSpans, &outputSpans, &width, &processedIn, this] noexcept(HasNoexceptProcessOneFunction<Derived>) { ret = invokeProcessOneSimd(inputSpans, outputSpans, width, processedIn); });
+                    invokeUserProvidedFunction("invokeProcessOneSimd", [&userReturnStatus, &inputSpans, &outputSpans, &width, &processedIn, this] noexcept(HasNoexceptProcessOneFunction<Derived>) { userReturnStatus = invokeProcessOneSimd(inputSpans, outputSpans, width, processedIn); });
                 } else {                                                 // Non-SIMD loop
                     if constexpr (HasConstProcessOneFunction<Derived>) { // processOne is const -> can process whole batch similar to SIMD-ised call
-                        invokeUserProvidedFunction("invokeProcessOnePure", [&ret, &inputSpans, &outputSpans, &processedIn, this] noexcept(HasNoexceptProcessOneFunction<Derived>) { ret = invokeProcessOnePure(inputSpans, outputSpans, processedIn); });
+                        invokeUserProvidedFunction("invokeProcessOnePure", [&userReturnStatus, &inputSpans, &outputSpans, &processedIn, this] noexcept(HasNoexceptProcessOneFunction<Derived>) { userReturnStatus = invokeProcessOnePure(inputSpans, outputSpans, processedIn); });
                     } else { // processOne isn't const i.e. not a pure function w/o side effects -> need to evaluate state after each sample
                         const auto result = invokeProcessOneNonConst(inputSpans, outputSpans, processedIn);
-                        ret               = result.status;
+                        userReturnStatus  = result.status;
                         processedIn       = result.processedIn;
                         processedOut      = result.processedOut;
                     }
                 }
             }
         } else { // block does not define any valid processing function
-            static_assert(gr::meta::always_false<gr::traits::block::stream_input_port_types_tuple<Derived>>, "neither processBulk(...) nor processOne(...) implemented");
+            static_assert(meta::always_false<traits::block::stream_input_port_types_tuple<Derived>>, "neither processBulk(...) nor processOne(...) implemented");
         }
         if (processedIn > 0 && processedOut > 0) {
             forwardTags();
@@ -1576,26 +1579,59 @@ protected:
         if (lifecycle::isShuttingDown(this->state())) {
             emitErrorMessageIfAny("isShuttingDown -> STOPPED", this->changeStateTo(lifecycle::State::REQUESTED_STOP));
             applyChangedSettings();
-            ret         = work::Status::DONE;
-            processedIn = 0UZ;
+            userReturnStatus = DONE;
+            processedIn      = 0UZ;
         }
+
+        // sanitise input/output samples based on explicit user-defined processBulk(...) return status
+        if (userReturnStatus == INSUFFICIENT_OUTPUT_ITEMS || userReturnStatus == INSUFFICIENT_INPUT_ITEMS || userReturnStatus == ERROR) {
+            processedIn  = 0UZ;
+            processedOut = 0UZ;
+        }
+
         // publish/consume
         publishSamples(processedOut, outputSpans);
         const auto inputSamplesToConsume = inputSamplesToConsumeAdjustedWithStride(resampledIn);
-        bool       success;
         if (inputSamplesToConsume > 0) {
-            success = consumeReaders(inputSamplesToConsume, inputSpans);
+            if (!consumeReaders(inputSamplesToConsume, inputSpans)) {
+                userReturnStatus = ERROR;
+            }
         } else {
-            success = consumeReaders(processedIn, inputSpans);
+            if (!consumeReaders(processedIn, inputSpans)) {
+                userReturnStatus = ERROR;
+            }
         }
+
         // if the block state changed to DONE, publish EOS tag on the next sample
-        if (ret == work::Status::DONE) {
+        if (userReturnStatus == DONE) {
             this->setAndNotifyState(lifecycle::State::STOPPED);
             publishEoS();
         }
         for_each_port([](PortLike auto& outPort) { outPort.publishPendingTags(); }, outputPorts<PortType::STREAM>(&self()));
-        return {requested_work, processedIn, success ? ret : work::Status::ERROR};
-    } // end: work_return_t workInternal() noexcept { ..}
+
+        // check/sanitise return values (N.B. these are used by the scheduler as indicators
+        // whether and how much 'work' has been done to -- for example -- prioritise one block over another
+        std::size_t performedWork = 0UZ;
+        if (userReturnStatus == OK) {
+            constexpr bool kIsSourceBlock = traits::block::stream_input_port_types<Derived>::size == 0;
+            constexpr bool kIsSinkBlock   = traits::block::stream_output_port_types<Derived>::size == 0;
+            if constexpr (kIsSourceBlock && kIsSinkBlock) {
+                performedWork = processedIn;
+            } else if constexpr (kIsSinkBlock) {
+                performedWork = processedIn;
+            } else if constexpr (kIsSourceBlock) {
+                performedWork = processedOut;
+            } else {
+                performedWork = 1UZ;
+            }
+
+            progress->incrementAndGet();
+            if constexpr (blockingIO) {
+                progress->notify_all();
+            }
+        }
+        return {requested_work, performedWork, userReturnStatus};
+    } // end: work::Result workInternal(std::size_t requested_work) { ... }
 
 public:
     work::Status invokeWork()
@@ -1604,9 +1640,6 @@ public:
         auto [work_requested, work_done, last_status] = workInternal(std::atomic_load_explicit(&ioRequestedWork, std::memory_order_acquire));
         ioWorkDone.increment(work_requested, work_done);
         ioLastWorkStatus.exchange(last_status, std::memory_order_relaxed);
-
-        std::ignore = progress->incrementAndGet();
-        progress->notify_all();
         return last_status;
     }
 
