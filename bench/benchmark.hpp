@@ -164,11 +164,30 @@ quick_fix: sudo sh -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid'
 for details see: https://www.kernel.org/doc/Documentation/sysctl/kernel.txt)";
 
     static void print_access_right_msg(std::string_view msg) noexcept {
-        fmt::print(stderr, "PerformanceCounter: {} - error {}: '{}'", msg, errno, strerror(errno));
-        _has_required_rights = false;
-        std::cerr << std::endl;
-        fmt::print(_sys_error_message);
-        std::cout << std::endl;
+        try {
+            if (errno != 0) {
+                fmt::println(stderr, "PerformanceCounter: {} - error {}: '{}'", msg, errno, strerror(errno));
+            } else {
+                fmt::println(stderr, "PerformanceCounter: {}", msg);
+            }
+            _has_required_rights = false;
+
+            // Print system error message
+            fmt::print(_sys_error_message);
+
+        } catch (const std::system_error& e) {
+            // Handle potential exceptions from fmt::print
+            std::cerr << "System error during logging: " << e.what() << '\n';
+        } catch (const std::exception& e) {
+            // Handle other exceptions
+            std::cerr << "Error during logging: " << e.what() << '\n';
+        } catch (...) {
+            // Handle any other unknown exceptions
+            std::cerr << "Unknown error during logging\n";
+        }
+
+        std::cerr.flush();
+        std::cout.flush();
     }
 
     static int open_perf_event(perf_event_attr& attr, int pid, int cpu, int group_fd, unsigned long flags) {
